@@ -79,6 +79,8 @@ export const PluginConfigSchema = z.object({
 	preemptiveQuotaMaxDeferralMs: z.number().min(1_000).optional(),
 	routingMutex: z.enum(["enabled", "legacy"]).optional(),
 	schedulingStrategy: z.enum(["hybrid", "sequential"]).optional(),
+	/** Named provider backend for the rotation proxy (e.g. "openai", "kimi"). */
+	providerBackend: z.string().optional(),
 });
 
 export type PluginConfigFromSchema = z.infer<typeof PluginConfigSchema>;

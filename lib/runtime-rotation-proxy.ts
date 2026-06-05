@@ -7,6 +7,7 @@ import {
 	extractAccountId,
 	type ManagedAccount,
 } from "./accounts.js";
+import { getBackend, type ProviderBackend } from "./provider-backend.js";
 import { withRoutingMutex } from "./routing-mutex.js";
 import { getStoragePath } from "./storage.js";
 import {
@@ -23,14 +24,13 @@ import {
 	getTokenRefreshSkewMs,
 	getPidOffsetEnabled,
 	getRoutingMutexMode,
+	getProviderBackend,
 	getSchedulingStrategy,
 	loadPluginConfig,
 } from "./config.js";
 import {
-	CODEX_BASE_URL,
 	HTTP_STATUS,
 	OPENAI_HEADERS,
-	OPENAI_HEADER_VALUES,
 	URL_PATHS,
 } from "./constants.js";
 import { getModelFamily, type ModelFamily } from "./prompts/codex.js";
@@ -81,6 +81,8 @@ export interface RuntimeRotationProxyOptions {
 	host?: string;
 	port?: number;
 	upstreamBaseUrl?: string;
+	/** Named provider backend (e.g. "openai", "kimi"). Defaults to "openai". */
+	backendName?: string;
 	clientApiKey: string;
 	accountManager?: AccountManager;
 	fetchImpl?: typeof fetch;
@@ -260,28 +262,8 @@ function headersFromIncoming(req: IncomingMessage): Headers {
 	return headers;
 }
 
-function createOutboundHeaders(
-	incoming: Headers,
-	account: ManagedAccount,
-	accessToken: string,
-	accountId: string,
-): Headers {
-	const headers = new Headers(incoming);
-	for (const name of HOP_BY_HOP_HEADERS) {
-		headers.delete(name);
-	}
-	headers.delete("host");
-	headers.delete("x-api-key");
-	// Never forward inbound client credentials upstream: a Cookie / proxy-auth
-	// header would ride along with the managed OAuth Bearer to OpenAI.
-	headers.delete("cookie");
-	headers.delete("proxy-authorization");
-	headers.set("authorization", `Bearer ${accessToken}`);
-	headers.set(OPENAI_HEADERS.ACCOUNT_ID, accountId);
-	headers.set(OPENAI_HEADERS.BETA, OPENAI_HEADER_VALUES.BETA_RESPONSES);
-	headers.set(OPENAI_HEADERS.ORIGINATOR, OPENAI_HEADER_VALUES.ORIGINATOR_CODEX);
-	return headers;
-}
+// createOutboundHeaders has been moved to ProviderBackend.createOutboundHeaders()
+// See lib/provider-backend.ts for the OpenAI and Kimi implementations.
 
 function isAuthorizedClient(headers: Headers, clientApiKey: string): boolean {
 	const authorization = headers.get("authorization") ?? "";
@@ -1591,7 +1573,9 @@ export async function startRuntimeRotationProxy(
 	const bindHost = toBindHost(host);
 	const urlHost = toUrlHost(host);
 	const port = options.port ?? 0;
-	const upstreamBaseUrl = options.upstreamBaseUrl ?? CODEX_BASE_URL;
+	const backendName = options.backendName ?? getProviderBackend(pluginConfig);
+	const backend: ProviderBackend = getBackend(backendName);
+	const upstreamBaseUrl = options.upstreamBaseUrl ?? backend.upstreamBaseUrl;
 	const clientApiKey =
 		typeof options.clientApiKey === "string" &&
 		options.clientApiKey.trim().length > 0
@@ -1995,7 +1979,7 @@ export async function startRuntimeRotationProxy(
 				const accountIdentity = accountIdentityFromAccount(refreshed.account, now());
 				recordLastRuntimeAccount(status, accountIdentity);
 
-				const outboundHeaders = createOutboundHeaders(
+				const outboundHeaders = backend.createOutboundHeaders(
 					context.headers,
 					refreshed.account,
 					refreshed.accessToken,

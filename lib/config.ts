@@ -1918,6 +1918,18 @@ export function getSchedulingStrategy(
 	);
 }
 
+/**
+ * Named provider backend for the rotation proxy.
+ * Controls which upstream the proxy talks to and how auth headers are built.
+ */
+export function getProviderBackend(
+	pluginConfig: PluginConfig,
+): string {
+	const envVal = process.env.CODEX_AUTH_PROVIDER_BACKEND?.trim();
+	if (envVal && envVal.length > 0) return envVal;
+	return pluginConfig.providerBackend ?? "openai";
+}
+
 type ConfigExplainMeta = {
 	key: keyof PluginConfig;
 	envNames: string[];
@@ -2272,6 +2284,11 @@ const CONFIG_EXPLAIN_ENTRIES: ConfigExplainMeta[] = [
 		key: "schedulingStrategy",
 		envNames: ["CODEX_AUTH_SCHEDULING_STRATEGY"],
 		getValue: getSchedulingStrategy,
+	},
+	{
+		key: "providerBackend",
+		envNames: ["CODEX_AUTH_PROVIDER_BACKEND"],
+		getValue: getProviderBackend,
 	},
 ];
 
