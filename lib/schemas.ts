@@ -190,6 +190,8 @@ export const AccountMetadataV3Schema = z.object({
 	// silently vanish after one read/write round-trip.
 	workspaces: z.array(WorkspaceSchema).optional(),
 	currentWorkspaceIndex: z.number().optional(),
+	/** Provider backend name (e.g. "openai", "kimi"). Defaults to "openai". */
+	backend: z.string().optional(),
 });
 
 export type AccountMetadataV3FromSchema = z.infer<
