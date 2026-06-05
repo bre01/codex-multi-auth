@@ -267,6 +267,8 @@ export interface ManagedAccount {
 	consecutiveAuthFailures?: number;
 	workspaces?: Workspace[];
 	currentWorkspaceIndex?: number;
+	/** Provider backend name (e.g. "openai", "kimi"). Defaults to "openai". */
+	backend?: string;
 }
 
 export class AccountManager {
@@ -471,9 +473,12 @@ export class AccountManager {
 			const baseNow = nowMs();
 			this.accounts = stored.accounts
 				.map((account, index): ManagedAccount | null => {
+					// Non-OpenAI backends (e.g. kimi) don't need a refresh token
+					const isAlternateBackend = !!account.backend && account.backend !== "openai";
 					if (
-						typeof account.refreshToken !== "string" ||
-						!account.refreshToken.trim()
+						!isAlternateBackend &&
+						(typeof account.refreshToken !== "string" ||
+						!account.refreshToken.trim())
 					) {
 						return null;
 					}
@@ -484,7 +489,7 @@ export class AccountManager {
 					const refreshToken =
 						matchesFallback && authFallback
 							? authFallback.refresh
-							: account.refreshToken;
+							: (account.refreshToken || `__${account.backend ?? "openai"}_placeholder__`);
 
 					return {
 						index,
@@ -514,6 +519,7 @@ export class AccountManager {
 						cooldownReason: account.cooldownReason,
 						workspaces: account.workspaces,
 						currentWorkspaceIndex: account.currentWorkspaceIndex,
+						backend: account.backend,
 					};
 				})
 				.filter((account): account is ManagedAccount => account !== null);
@@ -1300,6 +1306,7 @@ export class AccountManager {
 				cooldownReason: account.cooldownReason,
 				workspaces: account.workspaces,
 				currentWorkspaceIndex: account.currentWorkspaceIndex,
+				backend: account.backend,
 			})),
 			activeIndex,
 			activeIndexByFamily,

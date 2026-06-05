@@ -69,6 +69,8 @@ export interface AccountMetadataV3 {
 	cooldownReason?: CooldownReason;
 	workspaces?: Workspace[];
 	currentWorkspaceIndex?: number;
+	/** Provider backend name (e.g. "openai", "kimi"). Defaults to "openai". */
+	backend?: string;
 }
 
 export interface AccountStorageV3 {

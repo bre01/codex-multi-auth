@@ -864,6 +864,13 @@ async function ensureFreshAccessToken(params: {
 > {
 	const { accountManager, account, family, model, now, tokenRefreshSkewMs, tokenInvalidationCooldownMs } =
 		params;
+
+	// Non-OpenAI backends don't use OAuth tokens — return a placeholder.
+	// The ProviderBackend.createOutboundHeaders() will inject the real auth.
+	if (account.backend && account.backend !== "openai") {
+		return { ok: true, accessToken: `__${account.backend}_backend__`, account };
+	}
+
 	if (hasUsableAccessToken(account, now, tokenRefreshSkewMs)) {
 		return { ok: true, accessToken: account.access ?? "", account };
 	}
@@ -1336,32 +1343,41 @@ function chooseLinearScanFallback(params: {
 		advanceActivePointer = true,
 	} = params;
 
-	for (const account of accountManager.getAccountsSnapshot()) {
-		if (attemptedIndexes.has(account.index)) {
-			skipReasons?.set(account.index, "already-attempted");
-			continue;
-		}
-		if (policy?.blockedAccountIndexes.has(account.index)) {
-			skipReasons?.set(account.index, "policy-blocked");
-			continue;
-		}
-		const reason = accountManager.getAccountRuntimeSkipReason(
-			account.index,
-			family,
-			model,
-		);
-		if (!reason) {
-			const live = accountManager.getAccountByIndex(account.index);
-			if (!live) continue;
-			// L4 (deferred): unlocked cursor mutation — see chooseAccount header.
-			// Skipped in sequential mode (advanceActivePointer=false) so a
-			// within-request retry never reassigns the drain-first primary.
-			if (advanceActivePointer) {
-				accountManager.markSwitched(live, "rotation", family);
+	// Two-pass scan: primary backends (openai) first, then alternate backends
+	// (kimi, etc.) as lowest-priority fallback. This ensures alternate backends
+	// are only used when all primary accounts are exhausted.
+	const allAccounts = accountManager.getAccountsSnapshot();
+	const primaryAccounts = allAccounts.filter((a) => !a.backend || a.backend === "openai");
+	const fallbackAccounts = allAccounts.filter((a) => !!a.backend && a.backend !== "openai");
+
+	for (const accounts of [primaryAccounts, fallbackAccounts]) {
+		for (const account of accounts) {
+			if (attemptedIndexes.has(account.index)) {
+				skipReasons?.set(account.index, "already-attempted");
+				continue;
 			}
-			return live;
+			if (policy?.blockedAccountIndexes.has(account.index)) {
+				skipReasons?.set(account.index, "policy-blocked");
+				continue;
+			}
+			const reason = accountManager.getAccountRuntimeSkipReason(
+				account.index,
+				family,
+				model,
+			);
+			if (!reason) {
+				const live = accountManager.getAccountByIndex(account.index);
+				if (!live) continue;
+				// L4 (deferred): unlocked cursor mutation — see chooseAccount header.
+				// Skipped in sequential mode (advanceActivePointer=false) so a
+				// within-request retry never reassigns the drain-first primary.
+				if (advanceActivePointer) {
+					accountManager.markSwitched(live, "rotation", family);
+				}
+				return live;
+			}
+			skipReasons?.set(account.index, reason);
 		}
-		skipReasons?.set(account.index, reason);
 	}
 
 	return null;
@@ -1979,7 +1995,16 @@ export async function startRuntimeRotationProxy(
 				const accountIdentity = accountIdentityFromAccount(refreshed.account, now());
 				recordLastRuntimeAccount(status, accountIdentity);
 
-				const outboundHeaders = backend.createOutboundHeaders(
+				// Resolve per-account backend: if the account has a specific backend,
+				// use it; otherwise use the proxy-level default.
+				const accountBackend = refreshed.account.backend
+					? getBackend(refreshed.account.backend)
+					: backend;
+				const accountUpstreamUrl = refreshed.account.backend
+					? buildUpstreamUrl(req, accountBackend.upstreamBaseUrl, context.upstreamPath)
+					: upstreamUrl;
+
+				const outboundHeaders = accountBackend.createOutboundHeaders(
 					context.headers,
 					refreshed.account,
 					refreshed.accessToken,
@@ -1999,7 +2024,7 @@ export async function startRuntimeRotationProxy(
 						upstreamRequestInit.body = context.body;
 					}
 					upstream = await withTimeout(
-						fetchImpl(upstreamUrl, upstreamRequestInit),
+						fetchImpl(accountUpstreamUrl, upstreamRequestInit),
 						fetchTimeoutMs,
 						() => fetchAbortController.abort(),
 						`upstream fetch timed out after ${fetchTimeoutMs}ms`,
