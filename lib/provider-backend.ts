@@ -118,34 +118,37 @@ export class OpenAIBackend implements ProviderBackend {
 	}
 }
 
-// ── Built-in: Kimi Code ───────────────────────────────────────────────────
+// ── Built-in: Anthropic-compatible backends ──────────────────────────────
 
 /**
- * Kimi Code backend.
+ * Generic backend for any provider that speaks Anthropic Messages API.
+ * Used by Kimi Code, DeepSeek, and any future Anthropic-compatible provider.
  *
- * Kimi's /coding/ endpoint speaks Anthropic Messages API natively but the
- * rotation proxy speaks Responses API.  The protocol translation is handled
- * by the kimi-codex-bridge (a separate sidecar process).  This backend
- * simply points the proxy at the bridge's localhost URL and injects
- * the bridge's bearer token instead of an OpenAI OAuth token.
+ * These providers need the kimi-codex-bridge sidecar to translate between
+ * Responses API (what Codex speaks) and Messages API (what the provider speaks).
  *
  * Architecture:
- *   rotation-proxy → kimi-codex-bridge:8766 → Kimi Code API
+ *   rotation-proxy → bridge:PORT → Provider API (Messages API)
  *
  * The bridge handles:
  *   - Responses API → Messages API translation
  *   - apply_patch custom tool conversion
  *   - SSE event format adaptation
  */
-export class KimiBackend implements ProviderBackend {
-	readonly name = "kimi";
+export class AnthropicCompatibleBackend implements ProviderBackend {
+	readonly name: string;
 	readonly upstreamBaseUrl: string;
 	readonly requiresOAuthTokens = false;
 	private readonly bearerToken: string;
 
-	constructor(options?: { bridgeUrl?: string; bearerToken?: string }) {
-		this.upstreamBaseUrl = options?.bridgeUrl ?? "http://127.0.0.1:8766";
-		this.bearerToken = options?.bearerToken ?? "kimi-bridge-token";
+	constructor(options: {
+		name: string;
+		bridgeUrl: string;
+		bearerToken?: string;
+	}) {
+		this.name = options.name;
+		this.upstreamBaseUrl = options.bridgeUrl;
+		this.bearerToken = options.bearerToken ?? `${options.name}-bridge-token`;
 	}
 
 	createOutboundHeaders(
@@ -162,9 +165,29 @@ export class KimiBackend implements ProviderBackend {
 		headers.delete("x-api-key");
 		headers.delete("cookie");
 		headers.delete("proxy-authorization");
-		// Use the bridge token, not the OpenAI access token
 		headers.set("authorization", `Bearer ${this.bearerToken}`);
 		return headers;
+	}
+}
+
+// Convenience aliases
+export class KimiBackend extends AnthropicCompatibleBackend {
+	constructor(options?: { bridgeUrl?: string; bearerToken?: string }) {
+		super({
+			name: "kimi",
+			bridgeUrl: options?.bridgeUrl ?? "http://127.0.0.1:8766",
+			bearerToken: options?.bearerToken,
+		});
+	}
+}
+
+export class DeepSeekBackend extends AnthropicCompatibleBackend {
+	constructor(options?: { bridgeUrl?: string; bearerToken?: string }) {
+		super({
+			name: "deepseek",
+			bridgeUrl: options?.bridgeUrl ?? "http://127.0.0.1:8767",
+			bearerToken: options?.bearerToken,
+		});
 	}
 }
 
@@ -185,11 +208,6 @@ export function getBackend(name?: string): ProviderBackend {
 	const factory = backendRegistry.get(name);
 	if (factory) return factory();
 
-	// Check for Kimi by convention
-	if (name === "kimi") {
-		return new KimiBackend();
-	}
-
 	// Unknown backend — fall back to OpenAI
 	return new OpenAIBackend();
 }
@@ -197,3 +215,4 @@ export function getBackend(name?: string): ProviderBackend {
 // Register built-in backends
 registerBackend("openai", () => new OpenAIBackend());
 registerBackend("kimi", () => new KimiBackend());
+registerBackend("deepseek", () => new DeepSeekBackend());
